@@ -45,6 +45,7 @@ import { LoopDetectionService } from '../services/loopDetectionService.js';
 import { ideContext } from '../ide/ideContext.js';
 import { logFlashDecidedToContinue } from '../telemetry/loggers.js';
 import { FlashDecidedToContinueEvent } from '../telemetry/types.js';
+import { functionTracer } from '../utils/functionTracer.js';
 
 function isThinkingSupported(model: string) {
   if (model.startsWith('gemini-2.5')) return true;
@@ -504,13 +505,13 @@ export class GeminiClient {
     abortSignal: AbortSignal,
     model?: string,
   ): Promise<GenerateContentResponse> {
+    functionTracer.enter('generateContent', 'GeminiClient', [contents.length, generationConfig, model]);
+    try {
     const modelToUse = model ?? this.config.getModel();
     const configToUse: GenerateContentConfig = {
       ...this.generateContentConfig,
       ...generationConfig,
     };
-
-    try {
       const userMemory = this.config.getUserMemory();
       const systemInstruction = getCoreSystemPrompt(userMemory);
 
@@ -532,23 +533,26 @@ export class GeminiClient {
           await this.handleFlashFallback(authType, error),
         authType: this.config.getContentGeneratorConfig()?.authType,
       });
+      functionTracer.exit('generateContent', 'GeminiClient', 'success');
       return result;
     } catch (error: unknown) {
+      functionTracer.error('generateContent', 'GeminiClient', error);
       if (abortSignal.aborted) {
         throw error;
       }
 
+      const modelForError = model ?? this.config.getModel();
       await reportError(
         error,
-        `Error generating content via API with model ${modelToUse}.`,
+        `Error generating content via API with model ${modelForError}.`,
         {
           requestContents: contents,
-          requestConfig: configToUse,
+          requestConfig: generationConfig,
         },
         'generateContent-api',
       );
       throw new Error(
-        `Failed to generate content with model ${modelToUse}: ${getErrorMessage(error)}`,
+        `Failed to generate content with model ${modelForError}: ${getErrorMessage(error)}`,
       );
     }
   }

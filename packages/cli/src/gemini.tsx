@@ -36,6 +36,7 @@ import {
   logUserPrompt,
   AuthType,
   getOauthClient,
+  functionTracer,
 } from '@google/gemini-cli-core';
 import { validateAuthMethod } from './config/auth.js';
 import { setMaxSizedBoxDebugging } from './ui/components/shared/MaxSizedBox.js';
@@ -110,9 +111,12 @@ ${reason.stack}`
 }
 
 export async function main() {
-  setupUnhandledRejectionHandler();
-  const workspaceRoot = process.cwd();
-  const settings = loadSettings(workspaceRoot);
+  functionTracer.enter('main');
+  try {
+    setupUnhandledRejectionHandler();
+    const workspaceRoot = process.cwd();
+    functionTracer.log('Loading settings', { workspaceRoot });
+    const settings = loadSettings(workspaceRoot);
 
   await cleanupCheckpoints();
   if (settings.errors.length > 0) {
@@ -278,7 +282,12 @@ export async function main() {
   );
 
   await runNonInteractive(nonInteractiveConfig, input, prompt_id);
+  functionTracer.exit('main');
   process.exit(0);
+  } catch (error) {
+    functionTracer.error('main', undefined, error);
+    throw error;
+  }
 }
 
 function setWindowTitle(title: string, settings: LoadedSettings) {

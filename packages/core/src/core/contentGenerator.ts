@@ -18,6 +18,7 @@ import { DEFAULT_GEMINI_MODEL } from '../config/models.js';
 import { Config } from '../config/config.js';
 import { getEffectiveModel } from './modelCheck.js';
 import { UserTierId } from '../code_assist/types.js';
+import { functionTracer } from '../utils/functionTracer.js';
 
 /**
  * Interface abstracting the core functionalities for generating content and counting tokens.
@@ -109,38 +110,49 @@ export async function createContentGenerator(
   gcConfig: Config,
   sessionId?: string,
 ): Promise<ContentGenerator> {
-  const version = process.env.CLI_VERSION || process.version;
-  const httpOptions = {
-    headers: {
-      'User-Agent': `GeminiCLI/${version} (${process.platform}; ${process.arch})`,
-    },
-  };
-  if (
-    config.authType === AuthType.LOGIN_WITH_GOOGLE ||
-    config.authType === AuthType.CLOUD_SHELL
-  ) {
-    return createCodeAssistContentGenerator(
-      httpOptions,
-      config.authType,
-      gcConfig,
-      sessionId,
+  functionTracer.enter('createContentGenerator', undefined, [config.authType, config.model]);
+  try {
+    const version = process.env.CLI_VERSION || process.version;
+    const httpOptions = {
+      headers: {
+        'User-Agent': `GeminiCLI/${version} (${process.platform}; ${process.arch})`,
+      },
+    };
+    if (
+      config.authType === AuthType.LOGIN_WITH_GOOGLE ||
+      config.authType === AuthType.CLOUD_SHELL
+    ) {
+      const result = await createCodeAssistContentGenerator(
+        httpOptions,
+        config.authType,
+        gcConfig,
+        sessionId,
+      );
+      functionTracer.exit('createContentGenerator', undefined, 'codeAssist');
+      return result;
+    }
+
+    if (
+      config.authType === AuthType.USE_GEMINI ||
+      config.authType === AuthType.USE_VERTEX_AI
+    ) {
+      const googleGenAI = new GoogleGenAI({
+        apiKey: config.apiKey === '' ? undefined : config.apiKey,
+        vertexai: config.vertexai,
+        httpOptions,
+      });
+
+      functionTracer.exit('createContentGenerator', undefined, 'googleGenAI');
+      return googleGenAI.models;
+    }
+
+    const error = new Error(
+      `Error creating contentGenerator: Unsupported authType: ${config.authType}`,
     );
+    functionTracer.error('createContentGenerator', undefined, error);
+    throw error;
+  } catch (error) {
+    functionTracer.error('createContentGenerator', undefined, error);
+    throw error;
   }
-
-  if (
-    config.authType === AuthType.USE_GEMINI ||
-    config.authType === AuthType.USE_VERTEX_AI
-  ) {
-    const googleGenAI = new GoogleGenAI({
-      apiKey: config.apiKey === '' ? undefined : config.apiKey,
-      vertexai: config.vertexai,
-      httpOptions,
-    });
-
-    return googleGenAI.models;
-  }
-
-  throw new Error(
-    `Error creating contentGenerator: Unsupported authType: ${config.authType}`,
-  );
 }

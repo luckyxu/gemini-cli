@@ -24,6 +24,7 @@ import {
   toFriendlyError,
 } from '../utils/errors.js';
 import { GeminiChat } from './geminiChat.js';
+import { functionTracer } from '../utils/functionTracer.js';
 
 // Define a structure for tools passed to the server
 export interface ServerTool {
@@ -176,7 +177,11 @@ export class Turn {
     req: PartListUnion,
     signal: AbortSignal,
   ): AsyncGenerator<ServerGeminiStreamEvent> {
+    functionTracer.enter('run', 'Turn', [typeof req, signal?.aborted]);
     try {
+      // Log the complete prompt being sent to LLM in green
+      functionTracer.logLLMPrompt(req, { promptId: this.prompt_id, model: 'Turn.run' });
+      
       const responseStream = await this.chat.sendMessageStream(
         {
           message: req,
@@ -247,11 +252,14 @@ export class Turn {
         throw error;
       }
       if (signal.aborted) {
+        functionTracer.log('Turn cancelled by user');
         yield { type: GeminiEventType.UserCancelled };
         // Regular cancellation error, fail gracefully.
+        functionTracer.exit('run', 'Turn', 'cancelled');
         return;
       }
 
+      functionTracer.error('run', 'Turn', error);
       const contextForReport = [...this.chat.getHistory(/*curated*/ true), req];
       await reportError(
         error,
@@ -271,8 +279,10 @@ export class Turn {
         status,
       };
       yield { type: GeminiEventType.Error, value: { error: structuredError } };
+      functionTracer.exit('run', 'Turn', 'error');
       return;
     }
+    functionTracer.exit('run', 'Turn', 'completed');
   }
 
   private handlePendingFunctionCall(

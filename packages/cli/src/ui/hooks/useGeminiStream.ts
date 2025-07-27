@@ -26,6 +26,7 @@ import {
   UnauthorizedError,
   UserPromptEvent,
   DEFAULT_GEMINI_FLASH_MODEL,
+  functionTracer,
 } from '@google/gemini-cli-core';
 import { type Part, type PartListUnion, FinishReason } from '@google/genai';
 import {
@@ -145,9 +146,16 @@ export const useGeminiStream = (
   const loopDetectedRef = useRef(false);
 
   const onExec = useCallback(async (done: Promise<void>) => {
-    setIsResponding(true);
-    await done;
-    setIsResponding(false);
+    functionTracer.enter('onExec', 'useGeminiStream');
+    try {
+      setIsResponding(true);
+      await done;
+      setIsResponding(false);
+      functionTracer.exit('onExec', 'useGeminiStream');
+    } catch (error) {
+      functionTracer.error('onExec', 'useGeminiStream', error);
+      throw error;
+    }
   }, []);
   const { handleShellCommand } = useShellCommandProcessor(
     addItem,
@@ -527,14 +535,19 @@ export const useGeminiStream = (
       userMessageTimestamp: number,
       signal: AbortSignal,
     ): Promise<StreamProcessingStatus> => {
+      functionTracer.enter('processGeminiStreamEvents', 'useGeminiStream');
+      try {
       let geminiMessageBuffer = '';
       const toolCallRequests: ToolCallRequestInfo[] = [];
       for await (const event of stream) {
+        functionTracer.log('Stream event received', { type: event.type });
         switch (event.type) {
           case ServerGeminiEventType.Thought:
+            functionTracer.log('Thought received', { subject: event.value?.subject });
             setThought(event.value);
             break;
           case ServerGeminiEventType.Content:
+            functionTracer.log('Content received', { contentLength: event.value?.length });
             geminiMessageBuffer = handleContentEvent(
               event.value,
               geminiMessageBuffer,
@@ -542,12 +555,15 @@ export const useGeminiStream = (
             );
             break;
           case ServerGeminiEventType.ToolCallRequest:
+            functionTracer.log('Tool call requested', { toolName: event.value?.name, callId: event.value?.callId });
             toolCallRequests.push(event.value);
             break;
           case ServerGeminiEventType.UserCancelled:
+            functionTracer.log('User cancelled stream');
             handleUserCancelledEvent(userMessageTimestamp);
             break;
           case ServerGeminiEventType.Error:
+            functionTracer.log('Error in stream', { error: event.value?.error?.message });
             handleErrorEvent(event.value, userMessageTimestamp);
             break;
           case ServerGeminiEventType.ChatCompressed:
@@ -579,9 +595,22 @@ export const useGeminiStream = (
         }
       }
       if (toolCallRequests.length > 0) {
+        functionTracer.log('Scheduling tool calls', { count: toolCallRequests.length });
         scheduleToolCalls(toolCallRequests, signal);
       }
-      return StreamProcessingStatus.Completed;
+      
+      // Log the final response if we have content
+      if (geminiMessageBuffer.trim()) {
+        functionTracer.logResponse(geminiMessageBuffer, { bufferLength: geminiMessageBuffer.length });
+      }
+      
+      const result = StreamProcessingStatus.Completed;
+      functionTracer.exit('processGeminiStreamEvents', 'useGeminiStream', result);
+      return result;
+      } catch (error) {
+        functionTracer.error('processGeminiStreamEvents', 'useGeminiStream', error);
+        throw error;
+      }
     },
     [
       handleContentEvent,
@@ -600,6 +629,15 @@ export const useGeminiStream = (
       options?: { isContinuation: boolean },
       prompt_id?: string,
     ) => {
+      functionTracer.enter('submitQuery', 'useGeminiStream', [typeof query, options, prompt_id]);
+      
+      // Log the user prompt for detailed tracing
+      const queryText = Array.isArray(query) 
+        ? query.map(part => typeof part === 'string' ? part : part.text || JSON.stringify(part)).join(' ')
+        : typeof query === 'string' ? query : JSON.stringify(query);
+      functionTracer.logPrompt(queryText, { isContinuation: options?.isContinuation, promptId: prompt_id });
+      
+      try {
       if (
         (streamingState === StreamingState.Responding ||
           streamingState === StreamingState.WaitingForConfirmation) &&
@@ -686,6 +724,11 @@ export const useGeminiStream = (
         }
       } finally {
         setIsResponding(false);
+        functionTracer.exit('submitQuery', 'useGeminiStream');
+      }
+      } catch (error) {
+        functionTracer.error('submitQuery', 'useGeminiStream', error);
+        throw error;
       }
     },
     [

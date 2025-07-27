@@ -11,6 +11,7 @@ import {
   ToolRegistry,
   shutdownTelemetry,
   isTelemetrySdkInitialized,
+  functionTracer,
 } from '@google/gemini-cli-core';
 import {
   Content,
@@ -48,6 +49,8 @@ export async function runNonInteractive(
   input: string,
   prompt_id: string,
 ): Promise<void> {
+  functionTracer.enter('runNonInteractive', undefined, [input.length, prompt_id]);
+  try {
   await config.initialize();
   // Handle EPIPE errors when the output is piped to a command that closes early.
   process.stdout.on('error', (err: NodeJS.ErrnoException) => {
@@ -57,9 +60,11 @@ export async function runNonInteractive(
     }
   });
 
+  functionTracer.log('Getting Gemini client and tools');
   const geminiClient = config.getGeminiClient();
   const toolRegistry: ToolRegistry = await config.getToolRegistry();
 
+  functionTracer.log('Getting chat instance');
   const chat = await geminiClient.getChat();
   const abortController = new AbortController();
   let currentMessages: Content[] = [{ role: 'user', parts: [{ text: input }] }];
@@ -78,6 +83,7 @@ export async function runNonInteractive(
       }
       const functionCalls: FunctionCall[] = [];
 
+      functionTracer.log('Sending message to Gemini', { messageLength: currentMessages[0]?.parts?.length, turnCount });
       const responseStream = await chat.sendMessageStream(
         {
           message: currentMessages[0]?.parts || [], // Ensure parts are always provided
@@ -153,10 +159,12 @@ export async function runNonInteractive(
         currentMessages = [{ role: 'user', parts: toolResponseParts }];
       } else {
         process.stdout.write('\n'); // Ensure a final newline
+        functionTracer.exit('runNonInteractive', undefined, 'completed');
         return;
       }
     }
   } catch (error) {
+    functionTracer.error('runNonInteractive', undefined, error);
     console.error(
       parseAndFormatApiError(
         error,
@@ -168,5 +176,10 @@ export async function runNonInteractive(
     if (isTelemetrySdkInitialized()) {
       await shutdownTelemetry();
     }
+    functionTracer.exit('runNonInteractive', undefined, 'finished');
+  }
+  } catch (outerError) {
+    functionTracer.error('runNonInteractive', undefined, outerError);
+    throw outerError;
   }
 }
